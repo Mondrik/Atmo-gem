@@ -1,10 +1,10 @@
 import numpy as np
 import os
-import linefitter as lf
+from utils import linefitter as lf
 import matplotlib.pyplot as plt
 import astropy.io.fits as pft
 
-def get_test_sci_files(data_path='/home/mondrik/Gemini/chunks/'):
+def get_test_sci_files(data_path='/home/mondrik/Gemini/chunks/',raw=True):
     good_nights = ['2017-01-08', \
                    '2016-09-04']
     paths = [os.path.join(data_path,n) for n in good_nights]
@@ -14,9 +14,36 @@ def get_test_sci_files(data_path='/home/mondrik/Gemini/chunks/'):
         if len(sci_list) == 0:
             raise ValueError('No science files found for {}'.format(p))
         for f in sci_list:
-            sci_path = os.path.join(p,'gs'+f)
+            if raw:
+                sci_path = os.path.join(p,'raw',f)
+            else:
+                sci_path = os.path.join(p,'gs'+f)
             sci_files.append(sci_path)
     return sci_files
+
+def get_avoidance_regions():
+    red_ccd_start = [0,30]
+    blue_ccd_end = [6230,6265]
+    chip_gap1 = [2030,2130]
+    chip_gap2 = [4140,4230]
+    bad_col1 = [1475,1488]
+    bad_col2 = [2344,2355]
+    bad_col3 = [5645,5652]
+    return [red_ccd_start,blue_ccd_end,chip_gap1,chip_gap2,bad_col1,bad_col2,bad_col3]
+
+def get_continuum_points():
+    points = [110, 709, 1082, 2581, 4596, 5056, 5392, 5770, 5928, 6152]
+    return points
+
+def get_line_regions():
+    Halpha = [330,450] #656.45nm
+    Hbeta = [3650,3800] #486.14nm
+    Hgamma = [4650,4850] #434.04nm
+    Hdelta = [5220,5320] #410.17nm
+    Heps = [5500,5580] #397.01nm
+    unknown1 = [5588,5630]
+    Hzeta = [5660,5740] #388.90nm
+    return [Halpha,Hbeta,Hgamma,Hdelta,Heps,unknown1,Hzeta]
 
 
 def examine_linefitter_col_results(examine_raw=True,fit_type='voigt'):

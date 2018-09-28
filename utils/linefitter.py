@@ -5,6 +5,7 @@ import utils
 import emcee
 from scipy.optimize import curve_fit
 from astropy.modeling.models import Voigt1D, Moffat1D
+from astropy.convolution import Gaussian1DKernel,convolve
 
 def voigt(x,x0,a_l,fwhm_l,fwhm_g,offset):
     v = Voigt1D(x_0=x0,amplitude_L=a_l,fwhm_L=fwhm_l,fwhm_G=fwhm_g)
@@ -16,6 +17,14 @@ def gaussian(x,A,mu,sigma,offset):
 def moffat(x,x0,A,gamma,alpha,offset):
     m = Moffat1D(x_0=x0,amplitude=A,gamma=gamma,alpha=alpha)
     return m(x) + offset
+
+def get_num_params(fit_type):
+    if fit_type=='voigt':
+        return 5
+    elif fit_type=='moffat':
+        return 5
+    elif fit_type=='gaussian':
+        return 4
 
 def get_fit_func(fit_type):
     if fit_type=='voigt':
@@ -58,5 +67,21 @@ def fit_indiv_col(data,x=None,p0=None,fit_type='voigt'):
         popt,pcov = curve_fit(moffat,x,data,p0=p0,sigma=np.sqrt(np.abs(data))+10.)
     return popt
 
-def fit_spectrum():
-    pass
+def find_line_center(x_region,x,flux,convolve_flux=True):
+    """
+        Given a n x_region [x_low,x_high], find the center of the largest absorption line
+        in that region
+    """
+    low,high = x_region
+    i = np.where((x>low) & (x<high))[0]
+    #fit quadratic to small region around center and find center
+    xx = x[i]
+    if convolve_flux:
+        g = Gaussian1DKernel(stddev=2)
+        yy = convolve(flux,g)[i]
+    else:
+        yy = flux[i]
+    xmin = np.argmin(yy)
+
+    fit = np.polyfit(xx[xmin-5:xmin+6],yy[xmin-5:xmin+6],deg=2)
+    return -fit[1]/(2.*fit[0])
