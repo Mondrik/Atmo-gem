@@ -3,6 +3,7 @@ import os
 from utils import linefitter as lf
 import matplotlib.pyplot as plt
 import astropy.io.fits as pft
+import glob
 
 def get_test_sci_files(data_path='/home/mondrik/Gemini/chunks/',raw=True):
     good_nights = ['2017-01-08', \
@@ -20,6 +21,16 @@ def get_test_sci_files(data_path='/home/mondrik/Gemini/chunks/',raw=True):
                 sci_path = os.path.join(p,'gs'+f)
             sci_files.append(sci_path)
     return sci_files
+
+def get_all_sci_files(data_path='/home/mondrik/Gemini/raw/'):
+    file_list = glob.glob(os.path.join(data_path,'*.fits'))
+    sci_list = []
+    for f in file_list:
+        file_name = os.path.join(data_path,f)
+        d = pft.open(file_name)
+        if d[0].header['OBSCLASS'] == 'science':
+            sci_list.append(file_name)
+    return sci_list
 
 def get_avoidance_regions():
     red_ccd_start = [0,30]

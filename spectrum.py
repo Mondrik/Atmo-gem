@@ -104,7 +104,9 @@ class Spectrum():
 
     def generate_continuum_spectrum(self,spline_x_points=None):
         if spline_x_points is None:
-            spline_x_points = utils.get_continuum_points()
-        self.continuum_spline = UnivariateSpline(spline_x_points,self.optimal_counts[spline_x_points])
+            spline_x_points = np.array(utils.get_continuum_points())
+        spline_y_points = self.optimal_counts[spline_x_points]
+        not_nan = ~np.isnan(spline_y_points)
+        self.continuum_spline = UnivariateSpline(spline_x_points[not_nan],spline_y_points[not_nan])
         self.continuum_x = np.arange(np.min(spline_x_points),np.max(spline_x_points)+1)
         self.continuum_spectrum = self.continuum_spline(self.continuum_x)
