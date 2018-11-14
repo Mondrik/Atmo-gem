@@ -36,18 +36,21 @@ def get_fit_func(fit_type):
     else:
         print('Fit type {} not recognized...'.format(fit_type))
 
-def fit_indiv_col(data,x=None,p0=None,fit_type='voigt'):
+def fit_indiv_col(data,x=None,p0=None,sigma=None,fit_type='voigt'):
     if x is None:
         x = np.arange(len(data))
+    if sigma is None:
+        sigma = np.sqrt(np.abs(data))+10
     if fit_type == 'gaussian':
+        func = gaussian
         if p0 is None:
             mu0 = x[np.argmax(data)]
             A0 = np.max(data)
             sigma0 = 4.
             offset0 = np.median(data)
             p0 = [A0,mu0,sigma0,offset0]
-        popt,pcov = curve_fit(gaussian,x,data,p0=p0,sigma=np.sqrt(np.abs(data))+10)
     if fit_type == 'voigt':
+        func = voigt
         if p0 is None:
             x0 = x[np.argmax(data)]
             a_l = np.max(data)
@@ -55,8 +58,8 @@ def fit_indiv_col(data,x=None,p0=None,fit_type='voigt'):
             fwhm_g = 2.
             offset = np.median(data)
             p0 = [x0,a_l,fwhm_l,fwhm_g,offset]
-        popt,pcov = curve_fit(voigt,x,data,p0=p0,sigma=np.sqrt(np.abs(data))+10)
     if fit_type == 'moffat':
+        func = moffat
         if p0 is None:
             x0 = x[np.argmax(data)]
             A = np.max(data)
@@ -64,8 +67,9 @@ def fit_indiv_col(data,x=None,p0=None,fit_type='voigt'):
             alpha = 1.
             offset = np.median(data)
             p0 = [x0,A,gamma,alpha,offset]
-        popt,pcov = curve_fit(moffat,x,data,p0=p0,sigma=np.sqrt(np.abs(data))+10.)
-    return popt
+    popt,pcov = curve_fit(func,x,data,p0=p0,sigma=sigma)
+    chisq = np.sum(((data-func(data,*popt))/sigma)**2.)
+    return popt,chisq
 
 def find_line_center(x_region,x,flux,convolve_flux=True):
     """

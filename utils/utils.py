@@ -4,6 +4,10 @@ from utils import linefitter as lf
 import matplotlib.pyplot as plt
 import astropy.io.fits as pft
 import glob
+import astropy.units as u
+
+#Collection of useful data + functions that
+#help with GMOS reductions
 
 def get_test_sci_files(data_path='/home/mondrik/Gemini/chunks/',raw=True):
     good_nights = ['2017-01-08', \
@@ -22,12 +26,15 @@ def get_test_sci_files(data_path='/home/mondrik/Gemini/chunks/',raw=True):
             sci_files.append(sci_path)
     return sci_files
 
-def get_all_sci_files(data_path='/home/mondrik/Gemini/raw/'):
+def get_all_sci_files(data_path='/home/mondrik/Gemini/raw/',mask_name=None):
     file_list = glob.glob(os.path.join(data_path,'*.fits'))
     sci_list = []
     for f in file_list:
         file_name = os.path.join(data_path,f)
         d = pft.open(file_name)
+        if mask_name is not None:
+            if d[0].header['MASKNAME']!=mask_name:
+                continue
         if d[0].header['OBSCLASS'] == 'science':
             sci_list.append(file_name)
     return sci_list
@@ -40,7 +47,8 @@ def get_avoidance_regions():
     bad_col1 = [1475,1488]
     bad_col2 = [2344,2355]
     bad_col3 = [5645,5652]
-    return [red_ccd_start,blue_ccd_end,chip_gap1,chip_gap2,bad_col1,bad_col2,bad_col3]
+    bad_col4 = [3917,3924]
+    return [red_ccd_start,blue_ccd_end,chip_gap1,chip_gap2,bad_col1,bad_col2,bad_col3,bad_col4]
 
 def get_continuum_points():
     points = [110, 709, 1082, 2581, 4596, 5056, 5392, 5770, 5928, 6152]
@@ -56,44 +64,14 @@ def get_line_regions():
     Hzeta = [5660,5740] #388.90nm
     return [Halpha,Hbeta,Hgamma,Hdelta,Heps,unknown1,Hzeta]
 
+def get_line_wavelengths():
+    return np.asarray([656.45, 486.14, 434.04, 410.17, 397.01, np.nan, 388.9])
 
-def examine_linefitter_col_results(examine_raw=True,fit_type='voigt'):
-    d = pft.open(get_test_sci_files()[0])
-    data = d[2].data
-    x = np.arange(data.shape[0])
-    fit_array = np.zeros_like(data)
-    fit_func = lf.get_fit_func(fit_type)
-#    if fit_type=='voigt':
-#        fit_func = lf.voigt
-#    if fit_type=='moffat':
-#        fit_func = lf.moffat
-#    if fit_type=='gaussian':
-#        fit_func = lf.gaussian
-
-    for col in data[:,::500].T:
-        #plt.plot(x,col)
-        myfit = lf.fit_indiv_col(col,fit_type=fit_type)
-        xv = np.linspace(np.min(x),np.max(x),10000)
-        v = fit_func(xv,*myfit)
-        if examine_raw:
-            plt.plot(col,'-b')
-            plt.plot(xv,v,'--k')
-            plt.ylabel('Counts')
-        else:
-            plt.plot(x,np.abs(col-fit_func(x,*myfit))/col)
-            plt.axhline(0.1,color='r')
-            plt.axhline(0.01,color='r')
-            plt.ylim(0,0.5)
-            plt.ylabel('Data-Model / Data')
-        plt.xlabel('Pixel')
-        plt.show()
-
-
-def examine_extract_results(data,fit_type='voigt'):
-    counts,model_img = spectrum.extract(data,fit_type='voigt')
-    diff = data - model_img
-    qlow = np.percentile(diff.flatten(),10)
-    qhigh = np.percentile(diff.flatten(),90)
-
-    plt.imshow(diff,origin='lower',vmin=qlow,vmax=qhigh)
-    plt.show()
+def calc_parallactic_angle(hour_angle,obj_dec,obs_lat=-30.*u.degree):
+    #following eqn 10 from Fillipenko 1982
+    h = hour_angle.to(u.radian)
+    phi = obs_lat.to(u.radian)
+    obj_dec = obj_dec.to(u.radian)
+    temp1 = np.sin(h)*np.cos(phi)
+    temp2 = np.sqrt(1. - (np.sin(phi)*np.sin(obj_dec) + np.cos(phi)*np.cos(obj_dec)*np.cos(h))**2.)
+    return np.arcsin(temp1/temp2)
