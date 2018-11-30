@@ -3,7 +3,10 @@ from utils import linefitter as lf
 from utils import utils
 from utils import proc_image as pi
 import astroscrappy as scrap
+from specutils import Spectrum1D,SpectralRegion
+from specutils.analysis import equivalent_width
 import astropy.io.fits as pft
+import astropy.units as u
 from scipy.interpolate import UnivariateSpline
 import scipy.stats
 
@@ -170,3 +173,11 @@ class Spectrum():
         c = ~np.isnan(wavelengths)
         fit = np.polyfit(self.line_centers[c],wavelengths[c],deg=order)
         self.p = np.poly1d(fit)
+
+    def calc_equiv_width(self,region):
+        norm_spec = (self.optimal_counts[self.continuum_x] / self.continuum_spectrum)*u.photon
+        norm_spec_wave = self.p(self.continuum_x)*u.nanometer
+        not_nan = ~np.isnan(norm_spec)
+        spec = Spectrum1D(spectral_axis=norm_spec_wave[not_nan][::-1],flux=norm_spec[not_nan][::-1])
+        spec_region = SpectralRegion(region[0]*u.nm,region[1]*u.nm)
+        return equivalent_width(spec,regions=spec_region)
