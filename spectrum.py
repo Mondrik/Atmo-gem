@@ -9,6 +9,44 @@ import astropy.io.fits as pft
 import astropy.units as u
 from scipy.interpolate import UnivariateSpline
 import scipy.stats
+from multiprocessing import Pool
+
+#This funtion needs to be outside of the Spectrum class to allow
+#for parallelization of the column fitting
+def _fit_cols(args):
+    #unpack args here
+    col_num,col_data,xgrid,x,avoid,fit_type,fit_func,extraction_radius = args
+    results_dict = {}
+    results_dict['col_num'] = col_num #for convenience later
+    results_dict['skipped'] = False
+    if any([(col_num >= low) and (col_num <= high) for low,high in avoid]):
+        results_dict['skipped'] = True
+        return
+    try:
+        results_dict['my_fit'],results_dict['chi_sq'] = lf.fit_indiv_col(col_data,fit_type=fit_type)
+        results_dict['fit'] = fit_func(xgrid,*results_dict['my_fit'])
+        results_dict['model_col'] = fit_func(x,*results_dict['my_fit'])
+        ##optimal counts: approx
+        # -1 to lower extraction bound b/c of python 0 indexing
+        low = np.argmax(col_data) - (extraction_radius - 1)
+        high = np.argmax(col_data) + extraction_radius
+        #fit func w/ no offset should be PSF
+        temp = results_dict['my_fit']
+        temp[-1] = 0
+        norm = np.trapz(fit_func(xgrid,*temp),x=xgrid)
+        denom = np.sum((fit_func(x[low:high],*temp)/norm)**2.).astype(np.float)
+        num = np.sum(fit_func(x[low:high],*temp)/norm * col_data[low:high])
+        results_dict['optimal_counts'] = num/denom
+        results_dict['sum_counts'] = np.sum(col_data[low:high])
+        results_dict['failed_fit'] = False
+    except Exception as e:
+        print('Failed to extract column {}'.format(col_num),e)
+        results_dict['optimal_counts'] = np.nan
+        results_dict['sum_counts'] = np.nan
+        results_dict['chi_sq'] = np.nan
+        results_dict['failed_fit'] = True
+    return results_dict
+
 
 class Spectrum():
     def __init__(self,filename,remove_cosmics=True,remove_sky=True,remove_avoidance=True,bootstrap=False,correct_working_img_qe=True):
@@ -85,6 +123,60 @@ class Spectrum():
             not_nan = ~np.isnan(self.profile_img[i,:])
             fit = np.polyfit(pixels[not_nan],self.profile_img[i,:][not_nan],deg=order)
             self.fit_array[i-np.min(self.profile_region),:] = fit
+
+    def _build_col_fit_list(self,fit_type,fit_func,extraction_radius):
+        #col_num,col_data,xgrid,x,avoid,fit_type,fit_func,extraction_radius = args
+        cols = np.arange(self.working_img.shape[1])
+        x = np.arange(self.working_img.shape[0])
+        xgrid = np.linspace(np.min(x),np.max(x),10000)
+        col_fit_list = []
+
+        for c in cols:
+            col_fit_list.append([c,self.working_img[:,c],xgrid,x,self.avoid,fit_type,fit_func,extraction_radius])
+
+        return col_fit_list
+
+    def parallel_extract(self,fit_type='moffat',extraction_radius=30):
+        """
+        Given a fit_type, construct an integrated spectrum, and also a model image following results of the fit.  Also construct an array of the best fit parameters.
+        INPUTS:
+            fit_type            ::  Type of analytic function to fit LSF at each column. Options = ['voigt','moffat','gaussian'] (default: voigt)
+            extraction_bounds   ::  Width of spectral extraction region.  Larger extraction bounds include more pixels in extraction.  Defined as extent from peak pixel (ie, 2xextraction_bounds pixels are included in the integration).  Default = 30.
+        OUTPUTS:
+            NONE
+        No outputs, but allows access to self.optimal_counts (pseudo-optimal extraction over extraction_bounds as above)
+        Pseudo-optimal because we are using an analytic LSF rather than an empirical/exact LSF.
+        """
+        self.optimal_counts = np.zeros(self.working_img.shape[1])
+        self.sum_counts = np.zeros(self.working_img.shape[1])
+        self.chi_sq = np.zeros(self.working_img.shape[1])
+        self.model_img = np.zeros_like(self.working_img)
+        self.fit_func = lf.get_fit_func(fit_type)
+        #initialize all best fit params to nan, then replace if fit converges
+        self.model_bf_params = np.ones((self.working_img.shape[1],lf.get_num_params(fit_type)))*np.nan
+        self.failed_fit_cols = []
+        col_fit_list = self._build_col_fit_list(fit_type,self.fit_func,extraction_radius)
+
+        with Pool(5) as mypool:
+            results_list = mypool.map(_fit_cols,col_fit_list)
+        self.results_list = results_list
+
+        for res in self.results_list:
+            if res['skipped']:
+                continue
+            if res['failed_fit']:
+                self.failed_fit_cols.append(res['col_num'])
+                continue
+            self.optimal_counts[res['col_num']] = res['optimal_counts']
+            self.sum_counts[res['col_num']] = res['sum_counts']
+            self.chi_sq[res['col_num']] = res['chi_sq']
+            self.model_img[:,res['col_num']] = res['model_col']
+
+
+        self.failed_fit_cols = np.asarray(self.failed_fit_cols)
+        self.optimal_counts[self.optimal_counts==0] = np.nan
+        if not self.qe_correct:
+            self.optimal_counts[:2100] *= 1.2123
 
 
     def extract(self,fit_type='moffat',extraction_radius=30):
