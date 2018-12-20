@@ -21,7 +21,7 @@ def _fit_cols(args):
     results_dict['skipped'] = False
     if any([(col_num >= low) and (col_num <= high) for low,high in avoid]):
         results_dict['skipped'] = True
-        return
+        return results_dict
     try:
         results_dict['my_fit'],results_dict['chi_sq'] = lf.fit_indiv_col(col_data,fit_type=fit_type)
         results_dict['fit'] = fit_func(xgrid,*results_dict['my_fit'])
@@ -63,14 +63,17 @@ class Spectrum():
             self.working_img = self.data
         if remove_avoidance:
             self.remove_avoidance_regions()
+        self.generate_uncert_array()
         if remove_sky:
             self.sky_arr = self.estimate_sky()
             self.working_img = self.working_img - np.median(self.sky_arr,axis=0)
+
+        #self.qe_correct tells us if the QE correction has been done or not.  If qe_correct is True,
+        #then either the correction has been done, or was not requested.
         if correct_working_img_qe:
-            self.working_img[:,:2100] *= 1.2123
-            self.qe_correct = True
-        else:
             self.qe_correct = False
+        else:
+            self.qe_correct = True
 
     def remove_cosmics(self):
         mask,clean_img = scrap.detect_cosmics(self.data,sigclip=8,objlim=2.5, \
@@ -81,6 +84,10 @@ class Spectrum():
         for low,high in self.avoid:
             self.working_img[:,low:high] = np.nan
         return None
+
+    def generate_uncert_array(self):
+        self.uncert_array = np.sqrt(self.working_img) + 10
+
 
     def estimate_sky(self,sky_start=30,region_size=30):
         sky_arr = np.zeros((region_size*2,self.working_img.shape[1]))
@@ -136,7 +143,7 @@ class Spectrum():
 
         return col_fit_list
 
-    def parallel_extract(self,fit_type='moffat',extraction_radius=30):
+    def parallel_extract(self,fit_type='moffat',extraction_radius=30,n_procs=5):
         """
         Given a fit_type, construct an integrated spectrum, and also a model image following results of the fit.  Also construct an array of the best fit parameters.
         INPUTS:
@@ -157,7 +164,7 @@ class Spectrum():
         self.failed_fit_cols = []
         col_fit_list = self._build_col_fit_list(fit_type,self.fit_func,extraction_radius)
 
-        with Pool(5) as mypool:
+        with Pool(n_procs) as mypool:
             results_list = mypool.map(_fit_cols,col_fit_list)
         self.results_list = results_list
 
@@ -175,9 +182,7 @@ class Spectrum():
 
         self.failed_fit_cols = np.asarray(self.failed_fit_cols)
         self.optimal_counts[self.optimal_counts==0] = np.nan
-        if not self.qe_correct:
-            self.optimal_counts[:2100] *= 1.2123
-
+        self._correct_qe()
 
     def extract(self,fit_type='moffat',extraction_radius=30):
         """
@@ -235,21 +240,58 @@ class Spectrum():
                 print(e)
         self.failed_fit_cols = np.asarray(self.failed_fit_cols)
         self.optimal_counts[self.optimal_counts==0.] = np.nan
-        if not self.qe_correct:
-            self.optimal_counts[cols<2100] = self.optimal_counts[cols<2100] * 1.2123
+        self._correct_qe()
 
-    def generate_continuum_spectrum(self,spline_x_points=None):
+    def _correct_qe(self,qe_correction_value=1.2123,col_lim=2100):
+        if not self.qe_correct:
+            self.optimal_counts[:col_lim] = self.optimal_counts[:col_lim] * qe_correction_value
+            self.qe_correct = True
+        else:
+            print('QE Already corrected, doing nothing.')
+
+    def generate_continuum_spectrum(self,spline_x_points=None,spline_smoothing_factor=5e8):
         """
         Create a continuum spectrum using points defined in the utils module (or user provided x points, which must be defined as pixel numbers corresponding to self.optimal_counts).
         """
         if spline_x_points is None:
             spline_x_points = np.array(utils.get_continuum_points())
-        #spline breaks if nans are present
-        spline_y_points = self.optimal_counts[spline_x_points]
-        not_nan = ~np.isnan(spline_y_points)
-        self.continuum_spline = UnivariateSpline(spline_x_points[not_nan],spline_y_points[not_nan])
+        spline_y_values = self.optimal_counts[spline_x_points]
+
+        not_nan = ~np.isnan(spline_y_values)
+        self.continuum_spline = self._fit_spline(\
+                spline_x_points[not_nan],spline_y_values[not_nan],spline_smoothing_factor)
         self.continuum_x = np.arange(np.min(spline_x_points),np.max(spline_x_points)+1)
         self.continuum_spectrum = self.continuum_spline(self.continuum_x)
+
+    def generate_wlspace_continuum_spectrum(self,spline_x_regions=None,spline_smoothing_factor=8e7):
+        wavelengths = self.p(np.arange(6266)) #TODO: FIX ME
+        if spline_x_regions is None:
+            spline_x_regions = utils.get_EW_continuum_regions()
+
+        wl_indicies = []
+        for l,u in spline_x_regions:
+            region = np.where(np.logical_and(wavelengths>l,wavelengths<u))[0]
+            for i in region:
+                wl_indicies.append(i)
+        spline_x_points = wavelengths[np.asarray(wl_indicies)]
+        i = np.argsort(spline_x_points)
+        spline_x_points = spline_x_points[i]
+        not_nan = ~np.isnan(self.optimal_counts[wl_indicies][i])
+        self.spline_y_values = self.optimal_counts[wl_indicies][i]
+
+        self.a = spline_x_points
+
+        self.wl_continuum_spline = self._fit_spline(spline_x_points[not_nan],self.spline_y_values[not_nan],spline_smoothing_factor=8e7)
+        self.wl_continuum = self.wl_continuum_spline(wavelengths)
+        self.wl_continuum_waves = wavelengths
+
+
+    def _fit_spline(self,spline_x_points,spline_y_values,spline_smoothing_factor):
+        #spline breaks if nans are present
+        if any(np.isnan(spline_x_points)) or any(np.isnan(spline_y_values)):
+            raise ValueError('spectrum.Spectrum._fit_spline: Found NaN in input data.')
+        spline = UnivariateSpline(spline_x_points,spline_y_values,s=spline_smoothing_factor)
+        return spline
 
     def generate_wavelength_solution(self,order=3):
         """
@@ -267,8 +309,9 @@ class Spectrum():
         self.p = np.poly1d(fit)
 
     def calc_equiv_width(self,region):
-        norm_spec = (self.optimal_counts[self.continuum_x] / self.continuum_spectrum)*u.photon
-        norm_spec_wave = self.p(self.continuum_x)*u.nanometer
+        x = np.arange(6266) #TODO: FIX ME
+        norm_spec = (self.optimal_counts[x] / self.wl_continuum_spline(self.p(x)))*u.photon
+        norm_spec_wave = self.p(x)*u.nanometer
         not_nan = ~np.isnan(norm_spec)
         spec = Spectrum1D(spectral_axis=norm_spec_wave[not_nan][::-1],flux=norm_spec[not_nan][::-1])
         spec_region = SpectralRegion(region[0]*u.nm,region[1]*u.nm)

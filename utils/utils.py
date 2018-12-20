@@ -51,10 +51,41 @@ def get_avoidance_regions():
     return [red_ccd_start,blue_ccd_end,chip_gap1,chip_gap2,bad_col1,bad_col2,bad_col3,bad_col4]
 
 def get_continuum_points():
-    points = [110, 709, 1082, 2581, 4596, 5056, 5392, 5770, 5928, 6152]
-    return points
+    regions = [[100,200],
+            [630,750],
+            [1300,1375],
+            [2451,2755],
+            [3200,3500],
+            [3950,4100],
+            [4220,4268],
+            [4470,4730],
+            [4940,5180],
+            [5354,5490],
+            [6100,6240]]
+    #points = [110, 709, 1082, 2581, 4596, 5056, 5392, 5770, 5928, 6152]
+    points = []
+    for l,u in regions:
+        for i in np.arange(l,u+1):
+            points.append(i)
+    return np.asarray(points)
+
+def get_EW_continuum_regions():
+    regions = [[664,672],
+            [636,644],
+            [603,608],
+            [540,565],
+            [529,530],
+            [509,515],
+            [477,480],
+            [494,497],
+            [437,444],
+            [414,426],
+            [400,405],
+            [365,372]]
+    return np.asarray(regions)
 
 def get_line_regions():
+    #(these are in pixel-space)
     Halpha = [330,450] #656.45nm
     Hbeta = [3650,3800] #486.14nm
     Hgamma = [4650,4850] #434.04nm
@@ -66,6 +97,12 @@ def get_line_regions():
 
 def get_line_wavelengths():
     return np.asarray([656.45, 486.14, 434.04, 410.17, 397.01, np.nan, 388.9])
+
+def get_Halpha_continuum_regions():
+    return np.asarray([[640,645],[665,670]])
+
+def get_Hbeta_continuum_regions():
+    return np.asarray([[478,481],[490,491]])
 
 def calc_parallactic_angle(hour_angle,obj_dec,obs_lat=-30.*u.degree):
     #following eqn 10 from Fillipenko 1982
