@@ -3,6 +3,7 @@ import os
 from utils import linefitter as lf
 import matplotlib.pyplot as plt
 import astropy.io.fits as pft
+from astropy.time import Time
 import glob
 import astropy.units as u
 
@@ -38,6 +39,25 @@ def get_all_sci_files(data_path='/home/mondrik/Gemini/raw/',mask_name=None):
         if d[0].header['OBSCLASS'] == 'science':
             sci_list.append(file_name)
     return sci_list
+
+def get_image_pairs(use_cached=True,delta_t=0.25):
+    image_list = np.asarray(get_all_sci_files())
+    date_list = []
+    pair_idx_list = []
+    pair_names = []
+    for i in image_list:
+        d = pft.open(i)
+        date_list.append(Time(d[0].header['DATE-OBS']))
+        d.close()
+    unique_dates = np.asarray(list(set([i.value for i in date_list])))
+    date_list = np.asarray([d.value for d in date_list])
+    for date in unique_dates:
+        pair_idx_list.append(np.where(date_list == date)[0])
+    for entry in pair_idx_list:
+        pair_names.append(image_list[entry])
+
+    return pair_names
+
 
 def get_avoidance_regions():
     red_ccd_start = [0,30]
@@ -99,7 +119,10 @@ def get_line_wavelengths():
     return np.asarray([656.45, 486.14, 434.04, 410.17, 397.01, np.nan, 388.9])
 
 def get_Halpha_continuum_regions():
-    return np.asarray([[640,645],[665,670]])
+    return np.asarray([[651,652],[662,663]])
+
+def get_Hbeta_continuum_regions():
+    return np.asarray([[490.5,491.5],[478,481]])
 
 def get_Hbeta_continuum_regions():
     return np.asarray([[478,481],[490,491]])

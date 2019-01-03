@@ -10,6 +10,7 @@ import astropy.units as u
 from scipy.interpolate import UnivariateSpline
 import scipy.stats
 from multiprocessing import Pool
+import copy
 
 #This funtion needs to be outside of the Spectrum class to allow
 #for parallelization of the column fitting
@@ -31,7 +32,7 @@ def _fit_cols(args):
         low = np.argmax(col_data) - (extraction_radius - 1)
         high = np.argmax(col_data) + extraction_radius
         #fit func w/ no offset should be PSF
-        temp = results_dict['my_fit']
+        temp = copy.deepcopy(results_dict['my_fit'])
         temp[-1] = 0
         norm = np.trapz(fit_func(xgrid,*temp),x=xgrid)
         denom = np.sum((fit_func(x[low:high],*temp)/norm)**2.).astype(np.float)
@@ -74,6 +75,7 @@ class Spectrum():
             self.qe_correct = False
         else:
             self.qe_correct = True
+        self.pixels = np.arange(self.working_img.shape[1])
 
     def remove_cosmics(self):
         mask,clean_img = scrap.detect_cosmics(self.data,sigclip=8,objlim=2.5, \
@@ -86,7 +88,7 @@ class Spectrum():
         return None
 
     def generate_uncert_array(self):
-        self.uncert_array = np.sqrt(self.working_img) + 10
+        self.uncert_array = np.sqrt(np.abs(self.working_img)) + 10
 
 
     def estimate_sky(self,sky_start=30,region_size=30):
@@ -178,6 +180,7 @@ class Spectrum():
             self.sum_counts[res['col_num']] = res['sum_counts']
             self.chi_sq[res['col_num']] = res['chi_sq']
             self.model_img[:,res['col_num']] = res['model_col']
+            self.model_bf_params[res['col_num'],:] = res['my_fit']
 
 
         self.failed_fit_cols = np.asarray(self.failed_fit_cols)
@@ -249,6 +252,15 @@ class Spectrum():
         else:
             print('QE Already corrected, doing nothing.')
 
+    def _get_indicies_in_wavelength_region(self,region):
+        #Given a region (=[[lower,upper],[lower,upper]...]), find the indicies (pixel numbers) corresponding to the wavelength values in that region
+        indicies = []
+        for l,u in region:
+            r = np.where(np.logical_and(self.wavelengths>l,self.wavelengths<u))[0]
+            for i in r:
+                indicies.append(i)
+        return np.asarray(indicies)
+
     def generate_continuum_spectrum(self,spline_x_points=None,spline_smoothing_factor=5e8):
         """
         Create a continuum spectrum using points defined in the utils module (or user provided x points, which must be defined as pixel numbers corresponding to self.optimal_counts).
@@ -264,26 +276,23 @@ class Spectrum():
         self.continuum_spectrum = self.continuum_spline(self.continuum_x)
 
     def generate_wlspace_continuum_spectrum(self,spline_x_regions=None,spline_smoothing_factor=8e7):
-        wavelengths = self.p(np.arange(6266)) #TODO: FIX ME
         if spline_x_regions is None:
             spline_x_regions = utils.get_EW_continuum_regions()
 
-        wl_indicies = []
-        for l,u in spline_x_regions:
-            region = np.where(np.logical_and(wavelengths>l,wavelengths<u))[0]
-            for i in region:
-                wl_indicies.append(i)
-        spline_x_points = wavelengths[np.asarray(wl_indicies)]
+        wl_indicies = self._get_indicies_in_wavelength_region(spline_x_regions)#[]
+        #for l,u in spline_x_regions:
+        #    region = np.where(np.logical_and(wavelengths>l,wavelengths<u))[0]
+        #    for i in region:
+        #        wl_indicies.append(i)
+        spline_x_points = self.wavelengths[np.asarray(wl_indicies)]
         i = np.argsort(spline_x_points)
         spline_x_points = spline_x_points[i]
         not_nan = ~np.isnan(self.optimal_counts[wl_indicies][i])
-        self.spline_y_values = self.optimal_counts[wl_indicies][i]
+        spline_y_values = self.optimal_counts[wl_indicies][i]
 
-        self.a = spline_x_points
-
-        self.wl_continuum_spline = self._fit_spline(spline_x_points[not_nan],self.spline_y_values[not_nan],spline_smoothing_factor=8e7)
-        self.wl_continuum = self.wl_continuum_spline(wavelengths)
-        self.wl_continuum_waves = wavelengths
+        self.wl_continuum_spline = self._fit_spline(spline_x_points[not_nan],spline_y_values[not_nan],spline_smoothing_factor=8e7)
+        self.wl_continuum = self.wl_continuum_spline(self.wavelengths)
+        self.wl_continuum_waves = self.wavelengths
 
 
     def _fit_spline(self,spline_x_points,spline_y_values,spline_smoothing_factor):
@@ -306,13 +315,49 @@ class Spectrum():
         wavelengths = utils.get_line_wavelengths()
         c = ~np.isnan(wavelengths)
         fit = np.polyfit(self.line_centers[c],wavelengths[c],deg=order)
-        self.p = np.poly1d(fit)
+        self.pix2wave = np.poly1d(fit)
+        self.wavelengths = self.pix2wave(self.pixels)
 
-    def calc_equiv_width(self,region):
-        x = np.arange(6266) #TODO: FIX ME
-        norm_spec = (self.optimal_counts[x] / self.wl_continuum_spline(self.p(x)))*u.photon
-        norm_spec_wave = self.p(x)*u.nanometer
+    def _get_local_continuum(self,continuum_regions,order=1):
+        i = self._get_indicies_in_wavelength_region(continuum_regions)
+        x = self.wavelengths[i]
+        y = self.optimal_counts[i]
+        w = np.sqrt(y)
+        line_region = np.arange(np.min(i),np.max(i))
+        continuum_fit = np.polyfit(x,y,deg=order,w=w)
+        continuum_p = np.poly1d(continuum_fit)
+        continuum_wavelengths = self.wavelengths[line_region]
+        continuum_flux = continuum_p(continuum_wavelengths)
+        return continuum_wavelengths,continuum_flux
+
+    def calc_Halpha_EW(self):
+        continuum_regions = utils.get_Halpha_continuum_regions()
+        i = self._get_indicies_in_wavelength_region(continuum_regions)
+        Ha_indicies = np.arange(np.min(i),np.max(i))
+
+        self.Ha_region = self.wavelengths[Ha_indicies]
+        Ha_cont_x = self.wavelengths[i]
+        Ha_cont_y = self.wl_continuum[i]
+        i = np.argsort(Ha_cont_x)
+        self.Ha_continuum = np.interp(self.Ha_region,Ha_cont_x[i],Ha_cont_y[i])
+        self.Ha_region,self.Ha_continuum = self._get_local_continuum(continuum_regions)
+        Ha_EW = self._calc_EW(self.Ha_region,self.optimal_counts[Ha_indicies],self.Ha_continuum)
+        return Ha_EW
+
+    def calc_Halpha_EW(self):
+        continuum_regions = utils.get_Halpha_continuum_regions()
+        i = self._get_indicies_in_wavelength_region(continuum_regions)
+        Ha_indicies = np.arange(np.min(i),np.max(i))
+        self.Ha_continuum = np.interp(self.Ha_region,Ha_cont_x[i],Ha_cont_y[i])
+        self.Ha_region,self.Ha_continuum = self._get_local_continuum(continuum_regions)
+        Ha_EW = self._calc_EW(self.Ha_region,self.optimal_counts[Ha_indicies],self.Ha_continuum)
+        return Ha_EW
+
+
+    def _calc_EW(self,wavelengths,flux,continuum):
+        norm_spec = (flux / continuum)*u.photon
+        norm_spec_wave = wavelengths*u.nanometer
         not_nan = ~np.isnan(norm_spec)
         spec = Spectrum1D(spectral_axis=norm_spec_wave[not_nan][::-1],flux=norm_spec[not_nan][::-1])
-        spec_region = SpectralRegion(region[0]*u.nm,region[1]*u.nm)
+        spec_region = SpectralRegion(np.min(wavelengths)*u.nm,np.max(wavelengths)*u.nm)
         return equivalent_width(spec,regions=spec_region)
