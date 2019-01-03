@@ -77,9 +77,9 @@ class Spectrum():
             self.qe_correct = True
         self.pixels = np.arange(self.working_img.shape[1])
 
-    def remove_cosmics(self):
+    def remove_cosmics(self,verbose=False):
         mask,clean_img = scrap.detect_cosmics(self.data,sigclip=8,objlim=2.5, \
-                fsmode='convolve',psfmodel='gauss',psffwhm=5.0,verbose=True,niter=8)
+                fsmode='convolve',psfmodel='gauss',psffwhm=5.0,verbose=verbose,niter=8)
         return mask,clean_img
 
     def remove_avoidance_regions(self):
@@ -339,22 +339,28 @@ class Spectrum():
         Ha_cont_x = self.wavelengths[i]
         Ha_cont_y = self.wl_continuum[i]
         i = np.argsort(Ha_cont_x)
-        self.Ha_continuum = np.interp(self.Ha_region,Ha_cont_x[i],Ha_cont_y[i])
         self.Ha_region,self.Ha_continuum = self._get_local_continuum(continuum_regions)
         Ha_EW = self._calc_EW(self.Ha_region,self.optimal_counts[Ha_indicies],self.Ha_continuum)
         return Ha_EW
 
-    def calc_Halpha_EW(self):
-        continuum_regions = utils.get_Halpha_continuum_regions()
+    def calc_Hbeta_EW(self):
+        continuum_regions = utils.get_Hbeta_continuum_regions()
         i = self._get_indicies_in_wavelength_region(continuum_regions)
-        Ha_indicies = np.arange(np.min(i),np.max(i))
-        self.Ha_continuum = np.interp(self.Ha_region,Ha_cont_x[i],Ha_cont_y[i])
-        self.Ha_region,self.Ha_continuum = self._get_local_continuum(continuum_regions)
-        Ha_EW = self._calc_EW(self.Ha_region,self.optimal_counts[Ha_indicies],self.Ha_continuum)
-        return Ha_EW
+        Hb_indicies = np.arange(np.min(i),np.max(i))
+        self.Hb_region,self.Hb_continuum = self._get_local_continuum(continuum_regions)
+        Hb_EW = self._calc_EW(self.Hb_region,self.optimal_counts[Hb_indicies],self.Hb_continuum)
+        return Hb_EW
 
 
     def _calc_EW(self,wavelengths,flux,continuum):
+        """
+        Generic function to calculate (using SpecUtils) the Equivalent width of a line
+        requires: Wavelengths (assumed to be in nm)
+                  Flux (assumed to be in photons)
+                  Continuum (assumed to be in photons)
+        The equivalent width will be measured on the normalized spectrum (flux/continuum)
+        output: Equivalent_Width (Quantity)
+        """
         norm_spec = (flux / continuum)*u.photon
         norm_spec_wave = wavelengths*u.nanometer
         not_nan = ~np.isnan(norm_spec)

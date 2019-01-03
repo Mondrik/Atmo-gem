@@ -1,7 +1,7 @@
 import numpy as np
 import astropy.io.fits as pft
 
-def proc_gmoss_image(filename):
+def proc_gmoss_image(filename,verbose=False):
     gain_file = np.loadtxt('/home/mondrik/Gemini/analysis/gmosamps_gains.txt')
     N_amps = 12
 
@@ -35,6 +35,7 @@ def proc_gmoss_image(filename):
         #put in chip gap at end of the CCD
             science_array = np.hstack((science_array,chip_gap))
 
-        print('AMPLIFIER {amp:d} BIAS: {bias:7.1f}'.format(amp=i,bias=np.median(bias_vec)))
+        if verbose:
+            print('AMPLIFIER {amp:d} BIAS: {bias:7.1f}'.format(amp=i,bias=np.median(bias_vec)))
 
     return fits_file,science_array
