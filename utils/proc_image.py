@@ -1,7 +1,8 @@
 import numpy as np
 import astropy.io.fits as pft
+import os
 
-def proc_gmoss_image(filename,verbose=False):
+def proc_gmoss_image(filename,verbose=False,apply_master_bias=True,master_bias_path='/home/mondrik/Gemini/analysis/biases/'):
     gain_file = np.loadtxt('/home/mondrik/Gemini/analysis/gmosamps_gains.txt')
     N_amps = 12
 
@@ -37,5 +38,11 @@ def proc_gmoss_image(filename,verbose=False):
 
         if verbose:
             print('AMPLIFIER {amp:d} BIAS: {bias:7.1f}'.format(amp=i,bias=np.median(bias_vec)))
+
+    if apply_master_bias:
+        img_name = os.path.split(filename)[-1]
+        master_name = os.path.join(master_bias_path,'master_bias_'+img_name)
+        mb_hdu = pft.open(master_name)
+        science_array = science_array - mb_hdu[0].data
 
     return fits_file,science_array
