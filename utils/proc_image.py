@@ -2,7 +2,7 @@ import numpy as np
 import astropy.io.fits as pft
 import os
 
-def proc_gmoss_image(filename,verbose=False,apply_master_bias=True,master_bias_path='/home/mondrik/Gemini/analysis/biases/'):
+def proc_gmoss_image(filename,verbose=False,apply_master_bias=True,master_bias_path='/home/mondrik/Gemini/analysis/biases/',apply_gain_correction=True):
     gain_file = np.loadtxt('/home/mondrik/Gemini/analysis/gmosamps_gains.txt')
     N_amps = 12
 
@@ -25,7 +25,10 @@ def proc_gmoss_image(filename,verbose=False,apply_master_bias=True,master_bias_p
 
         #extract 512x512 science image and put into temp array
         #then concatenate into science array
-        gain = gain_file[i]
+        if apply_gain_correction:
+            gain = gain_file[i]
+        else:
+            gain = 1.
         sci_sec = fits_file[i+1].header['DATASEC']
         sci_sec = sci_sec.strip('[]').replace(',',':').split(':')
         sci_col_start = np.int(sci_sec[0]) - 1 #indexing is diff
