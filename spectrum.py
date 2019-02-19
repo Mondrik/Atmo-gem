@@ -52,9 +52,9 @@ def _fit_cols(args):
 class Spectrum():
     def __init__(self,filename,remove_cosmics=True,remove_sky=True,remove_avoidance=True,bootstrap=False,correct_working_img_qe=True):
         #get bias-subtracted and mosaiced image:
-        #TODO: MASTER BIAS RESIDUAL
         self.fits_file,self.data = pi.proc_gmoss_image(filename)
         if bootstrap:
+            #bootstrapped image is poission resampling of the gain-corrected, bias-removed image
             self.data = scipy.stats.poisson.rvs(np.abs(self.data))
         self.avoid = utils.get_avoidance_regions()
         if remove_cosmics:

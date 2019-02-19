@@ -8,6 +8,7 @@ def proc_gmoss_image(filename,verbose=False,apply_master_bias=True,master_bias_p
 
     fits_file = pft.open(filename)
     science_array = np.empty((512,0))
+    gain_array = np.empty((512,0))
     #chip gaps are 62 pixels (unbinned in x dir)
     chip_gap = np.zeros((512,61),dtype=np.float)
 
@@ -33,11 +34,14 @@ def proc_gmoss_image(filename,verbose=False,apply_master_bias=True,master_bias_p
         sci_sec = sci_sec.strip('[]').replace(',',':').split(':')
         sci_col_start = np.int(sci_sec[0]) - 1 #indexing is diff
         sci_col_end = np.int(sci_sec[1])
-        sci_temp = (fits_file[i+1].data[:,sci_col_start:sci_col_end] - bias_array)*gain
+        sci_temp = (fits_file[i+1].data[:,sci_col_start:sci_col_end] - bias_array)
+        gain_temp = np.ones_like(sci_temp)*gain
         science_array = np.hstack((science_array,sci_temp))
+        gain_array = np.hstack((gain_array,gain_temp))
         if i in [3,7]:
         #put in chip gap at end of the CCD
             science_array = np.hstack((science_array,chip_gap))
+            gain_array = np.hstack((gain_array,chip_gap))
 
         if verbose:
             print('AMPLIFIER {amp:d} BIAS: {bias:7.1f}'.format(amp=i,bias=np.median(bias_vec)))
@@ -47,5 +51,8 @@ def proc_gmoss_image(filename,verbose=False,apply_master_bias=True,master_bias_p
         master_name = os.path.join(master_bias_path,'master_bias_'+img_name)
         mb_hdu = pft.open(master_name)
         science_array = science_array - mb_hdu[0].data
+
+    #Need to multiply by gain array to actually correct data (gain array will be all 1's (0 in chip gap) if gain correction is set to False
+    science_array = science_array * gain_array
 
     return fits_file,science_array
