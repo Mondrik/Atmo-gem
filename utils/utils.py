@@ -6,6 +6,7 @@ import astropy.io.fits as pft
 from astropy.time import Time
 import glob
 import astropy.units as u
+from astropy.coordinates import Angle
 
 #Collection of useful data + functions that
 #help with GMOS reductions
@@ -109,25 +110,23 @@ def get_line_regions():
     Halpha = [330,450] #656.45nm
     Hbeta = [3650,3800] #486.14nm
     Hgamma = [4650,4850] #434.04nm
-    Hdelta = [5220,5320] #410.17nm
-    Heps = [5500,5580] #397.01nm
-    unknown1 = [5588,5630]
-    Hzeta = [5660,5740] #388.90nm
-    return [Halpha,Hbeta,Hgamma,Hdelta,Heps,unknown1,Hzeta]
+    #Hdelta = [5220,5320] #410.17nm
+    #Heps = [5500,5580] #397.01nm
+    #Hzeta = [5660,5740] #388.90nm
+    return [Halpha,Hbeta,Hgamma]
 
 def get_line_wavelengths():
-    return np.asarray([656.45, 486.14, 434.04, 410.17, 397.01, np.nan, 388.9])
+    return np.asarray([656.45, 486.14, 434.04])#, 410.17, 397.01, 388.9])
 
 def get_Halpha_continuum_regions():
     return np.asarray([[651,652],[662,663]])
 
 def get_Hbeta_continuum_regions():
-    return np.asarray([[490.5,491.5],[478,481]])
-
-def get_Hbeta_continuum_regions():
     return np.asarray([[478,481],[490,491]])
 
-def calc_parallactic_angle(hour_angle,obj_dec,obs_lat=-30.*u.degree):
+def calc_parallactic_angle(header,obs_lat=-30.*u.degree):
+    hour_angle = Angle(header['HA'],unit=u.hourangle)
+    obj_dec = Angle(np.float(header['DEC'])*u.degree)
     #following eqn 10 from Fillipenko 1982
     h = hour_angle.to(u.radian)
     phi = obs_lat.to(u.radian)
@@ -135,3 +134,10 @@ def calc_parallactic_angle(hour_angle,obj_dec,obs_lat=-30.*u.degree):
     temp1 = np.sin(h)*np.cos(phi)
     temp2 = np.sqrt(1. - (np.sin(phi)*np.sin(obj_dec) + np.cos(phi)*np.cos(obj_dec)*np.cos(h))**2.)
     return np.arcsin(temp1/temp2)
+
+def get_obs_time(fits_file):
+    #Get the time (in UTC) of the observation from the GMOS-S header
+    date = fits_file[0].header['DATE']
+    ut = fits_file[0].header['UT']
+    time = Time(date+' '+ut,format='iso',scale='utc')
+    return time

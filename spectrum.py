@@ -1,4 +1,5 @@
 import numpy as np
+import os
 from utils import linefitter as lf
 from utils import utils
 from utils import proc_image as pi
@@ -7,10 +8,12 @@ from specutils import Spectrum1D,SpectralRegion
 from specutils.analysis import equivalent_width
 import astropy.io.fits as pft
 import astropy.units as u
+from astropy.time import Time
 from scipy.interpolate import UnivariateSpline
 import scipy.stats
 from multiprocessing import Pool
 import copy
+import pickle
 
 #This funtion needs to be outside of the Spectrum class to allow
 #for parallelization of the column fitting
@@ -50,9 +53,11 @@ def _fit_cols(args):
 
 
 class Spectrum():
-    def __init__(self,filename,remove_cosmics=True,remove_sky=True,remove_avoidance=True,bootstrap=False,correct_working_img_qe=True):
+    def __init__(self,filename,remove_cosmics=True,remove_sky=True,remove_avoidance=True,bootstrap=False,metadata_file='/home/mondrik/Gemini/metadata.txt'):
         #get bias-subtracted and mosaiced image:
-        self.fits_file,self.data = pi.proc_gmoss_image(filename)
+        self.filename = filename
+        self.fits_file,self.data = pi.proc_gmoss_image(self.filename,verbose=True)
+        basename = os.path.split(self.filename)
         if bootstrap:
             #bootstrapped image is poission resampling of the gain-corrected, bias-removed image
             self.data = scipy.stats.poisson.rvs(np.abs(self.data))
@@ -67,14 +72,8 @@ class Spectrum():
         self.generate_uncert_array()
         if remove_sky:
             self.sky_arr = self.estimate_sky()
+            self.sky_uncert = np.sqrt(np.median(self.sky_arr,axis=0) / self.sky_arr.shape[0])
             self.working_img = self.working_img - np.median(self.sky_arr,axis=0)
-
-        #self.qe_correct tells us if the QE correction has been done or not.  If qe_correct is True,
-        #then either the correction has been done, or was not requested.
-        if correct_working_img_qe:
-            self.qe_correct = False
-        else:
-            self.qe_correct = True
         self.pixels = np.arange(self.working_img.shape[1])
 
     def remove_cosmics(self,verbose=False):
@@ -91,7 +90,7 @@ class Spectrum():
         self.uncert_array = np.sqrt(np.abs(self.working_img)) + 10
 
 
-    def estimate_sky(self,sky_start=30,region_size=30):
+    def estimate_sky(self,sky_start=40,region_size=30):
         sky_arr = np.zeros((region_size*2,self.working_img.shape[1]))
         #assume sky starts sky_start=30pix away from spectrum peak and sample region_size=30pix
         region_size -= 1 #need to remove 1 from region_size bc of python 0 indexing
@@ -113,26 +112,6 @@ class Spectrum():
                 raise
         return sky_arr
 
-    def generate_profile_img(self,profile_half_width=30,order=10):
-        #I THINK THIS IS GOING TO HAVE TO BE DONE ON A CCD-BY-CCD BASIS
-        #(SEE PLOTS OF PROF_IMG)
-        #width of the profile fit by the algorithm is phw*2+1, since it extends one half-width
-        #in each direction from the center (and includes the center pixel)
-        #generate P_xlambda following Horne 1986
-        col_sum = np.sum(self.working_img[200:300,:],axis=0)
-        self.prof_img = self.working_img / col_sum
-        self.prof_img[self.profile_img<0] = 0.
-        self.fit_array = np.ones((profile_half_width*2+1,order+1))*np.nan
-        #best guess for center of spectrum is where nanmedian is highest...
-        center_spec = np.argmax(np.nanmedian(self.working_img,axis=1))
-        pixels = np.arange(0,self.working_img.shape[1],1)
-        self.profile_region = np.arange(center_spec-profile_half_width,\
-                center_spec+profile_half_width+1)
-        for i in self.profile_region:
-            not_nan = ~np.isnan(self.profile_img[i,:])
-            fit = np.polyfit(pixels[not_nan],self.profile_img[i,:][not_nan],deg=order)
-            self.fit_array[i-np.min(self.profile_region),:] = fit
-
     def _build_col_fit_list(self,fit_type,fit_func,extraction_radius):
         #col_num,col_data,xgrid,x,avoid,fit_type,fit_func,extraction_radius = args
         cols = np.arange(self.working_img.shape[1])
@@ -149,17 +128,19 @@ class Spectrum():
         """
         Given a fit_type, construct an integrated spectrum, and also a model image following results of the fit.  Also construct an array of the best fit parameters.
         INPUTS:
-            fit_type            ::  Type of analytic function to fit LSF at each column. Options = ['voigt','moffat','gaussian'] (default: voigt)
+            fit_type            ::  Type of analytic function to fit LSF at each column. Options = ['voigt','moffat','gaussian'] (default: moffat)
             extraction_bounds   ::  Width of spectral extraction region.  Larger extraction bounds include more pixels in extraction.  Defined as extent from peak pixel (ie, 2xextraction_bounds pixels are included in the integration).  Default = 30.
+            n_procs             ::  Number of processors to use
         OUTPUTS:
             NONE
         No outputs, but allows access to self.optimal_counts (pseudo-optimal extraction over extraction_bounds as above)
-        Pseudo-optimal because we are using an analytic LSF rather than an empirical/exact LSF.
+        Pseudo-optimal because we are using an analytic PSF rather than an empirical/exact PSF.
         """
         self.optimal_counts = np.zeros(self.working_img.shape[1])
         self.sum_counts = np.zeros(self.working_img.shape[1])
         self.chi_sq = np.zeros(self.working_img.shape[1])
         self.model_img = np.zeros_like(self.working_img)
+        self.fit_func_name = fit_type
         self.fit_func = lf.get_fit_func(fit_type)
         #initialize all best fit params to nan, then replace if fit converges
         self.model_bf_params = np.ones((self.working_img.shape[1],lf.get_num_params(fit_type)))*np.nan
@@ -185,7 +166,6 @@ class Spectrum():
 
         self.failed_fit_cols = np.asarray(self.failed_fit_cols)
         self.optimal_counts[self.optimal_counts==0] = np.nan
-        self._correct_qe()
 
     def extract(self,fit_type='moffat',extraction_radius=30):
         """
@@ -205,6 +185,7 @@ class Spectrum():
         x = np.arange(self.working_img.shape[0])
         xgrid = np.linspace(np.min(x),np.max(x),10000)
         self.model_img = np.zeros_like(self.working_img)
+        self.fit_func_name = fit_type
         self.fit_func = lf.get_fit_func(fit_type)
         #initialize all best fit params to nan, then replace if fit converges
         self.model_bf_params = np.ones((self.working_img.shape[1],lf.get_num_params(fit_type)))*np.nan
@@ -243,14 +224,6 @@ class Spectrum():
                 print(e)
         self.failed_fit_cols = np.asarray(self.failed_fit_cols)
         self.optimal_counts[self.optimal_counts==0.] = np.nan
-        self._correct_qe()
-
-    def _correct_qe(self,qe_correction_value=1.2123,col_lim=2100):
-        if not self.qe_correct:
-            self.optimal_counts[:col_lim] = self.optimal_counts[:col_lim] * qe_correction_value
-            self.qe_correct = True
-        else:
-            print('QE Already corrected, doing nothing.')
 
     def _get_indicies_in_wavelength_region(self,region):
         #Given a region (=[[lower,upper],[lower,upper]...]), find the indicies (pixel numbers) corresponding to the wavelength values in that region
@@ -275,26 +248,6 @@ class Spectrum():
         self.continuum_x = np.arange(np.min(spline_x_points),np.max(spline_x_points)+1)
         self.continuum_spectrum = self.continuum_spline(self.continuum_x)
 
-    def generate_wlspace_continuum_spectrum(self,spline_x_regions=None,spline_smoothing_factor=8e7):
-        if spline_x_regions is None:
-            spline_x_regions = utils.get_EW_continuum_regions()
-
-        wl_indicies = self._get_indicies_in_wavelength_region(spline_x_regions)#[]
-        #for l,u in spline_x_regions:
-        #    region = np.where(np.logical_and(wavelengths>l,wavelengths<u))[0]
-        #    for i in region:
-        #        wl_indicies.append(i)
-        spline_x_points = self.wavelengths[np.asarray(wl_indicies)]
-        i = np.argsort(spline_x_points)
-        spline_x_points = spline_x_points[i]
-        not_nan = ~np.isnan(self.optimal_counts[wl_indicies][i])
-        spline_y_values = self.optimal_counts[wl_indicies][i]
-
-        self.wl_continuum_spline = self._fit_spline(spline_x_points[not_nan],spline_y_values[not_nan],spline_smoothing_factor=8e7)
-        self.wl_continuum = self.wl_continuum_spline(self.wavelengths)
-        self.wl_continuum_waves = self.wavelengths
-
-
     def _fit_spline(self,spline_x_points,spline_y_values,spline_smoothing_factor):
         #spline breaks if nans are present
         if any(np.isnan(spline_x_points)) or any(np.isnan(spline_y_values)):
@@ -304,7 +257,11 @@ class Spectrum():
 
     def generate_wavelength_solution(self,order=3):
         """
-        Instantiates a polynomial that provides the pixel-wavelength map
+        Instantiates a polynomial that provides the pixel-wavelength map.  The polynomial is available from Spectrum.pix2wave(), and the coefficients are available in Spectrum.wavelength_fit_coeffs.
+        Inputs:
+            Order (int) :: Order of the polynomial to fit
+        Returns:
+            None
         """
         regions = utils.get_line_regions()
         self.line_centers = np.zeros(len(regions))
@@ -314,8 +271,8 @@ class Spectrum():
             self.line_centers[i] = lf.find_line_center(region,self.continuum_x,norm_spec)
         wavelengths = utils.get_line_wavelengths()
         c = ~np.isnan(wavelengths)
-        fit = np.polyfit(self.line_centers[c],wavelengths[c],deg=order)
-        self.pix2wave = np.poly1d(fit)
+        self.wavelength_fit_coeffs = np.polyfit(self.line_centers[c],wavelengths[c],deg=order)
+        self.pix2wave = np.poly1d(self.wavelength_fit_coeffs)
         self.wavelengths = self.pix2wave(self.pixels)
 
     def _get_local_continuum(self,continuum_regions,order=1):
@@ -334,11 +291,6 @@ class Spectrum():
         continuum_regions = utils.get_Halpha_continuum_regions()
         i = self._get_indicies_in_wavelength_region(continuum_regions)
         Ha_indicies = np.arange(np.min(i),np.max(i))
-
-        self.Ha_region = self.wavelengths[Ha_indicies]
-        Ha_cont_x = self.wavelengths[i]
-        Ha_cont_y = self.wl_continuum[i]
-        i = np.argsort(Ha_cont_x)
         self.Ha_region,self.Ha_continuum = self._get_local_continuum(continuum_regions)
         Ha_EW = self._calc_EW(self.Ha_region,self.optimal_counts[Ha_indicies],self.Ha_continuum)
         return Ha_EW
@@ -367,3 +319,24 @@ class Spectrum():
         spec = Spectrum1D(spectral_axis=norm_spec_wave[not_nan][::-1],flux=norm_spec[not_nan][::-1])
         spec_region = SpectralRegion(np.min(wavelengths)*u.nm,np.max(wavelengths)*u.nm)
         return equivalent_width(spec,regions=spec_region)
+
+    def get_save_dict(self):
+        save_dict = {}
+        save_dict['filename'] = self.filename
+        save_dict['obs_time'] = utils.get_obs_time(self.fits_file)
+        save_dict['parallactic_angle'] = utils.calc_parallactic_angle(self.fits_file[0].header)
+        save_dict['airmass'] = np.float(self.fits_file[0].header['AIRMASS'])
+        save_dict['instrument_alignment_angle'] = np.float(self.fits_file[0].header['IAA'])
+        save_dict['position_angle'] = np.float(self.fits_file[0].header['PA'])
+        save_dict['optimal_counts'] = self.optimal_counts
+        save_dict['wavelength'] = self.wavelengths
+        save_dict['wlfit_line_centers'] = self.line_centers
+        save_dict['wavelength_fit_coeffs'] = self.wavelength_fit_coeffs
+        save_dict['working_img'] = self.working_img
+        save_dict['fit_func'] = self.fit_func_name
+        save_dict['model_bf_params'] = self.model_bf_params
+        save_dict['fwhm'] = 2.*self.model_bf_params[:,2]*np.sqrt(2.**(1./self.model_bf_params[:,3])-1)
+        save_dict['Halpha_EW'] = self.calc_Halpha_EW()
+        save_dict['Hbeta_EW'] = self.calc_Hbeta_EW()
+        save_dict['sky_array'] = self.sky_arr
+        return save_dict

@@ -44,7 +44,7 @@ def proc_gmoss_image(filename,verbose=False,apply_master_bias=True,master_bias_p
             gain_array = np.hstack((gain_array,chip_gap))
 
         if verbose:
-            print('AMPLIFIER {amp:d} BIAS: {bias:7.1f}'.format(amp=i,bias=np.median(bias_vec)))
+            print('AMPLIFIER {amp:d} BIAS: {bias:7.1f} BIAS_RMS: {biasrms:5.2f}'.format(amp=i,bias=np.median(bias_vec),biasrms=np.std(bias_vec)))
 
     if apply_master_bias:
         img_name = os.path.split(filename)[-1]
