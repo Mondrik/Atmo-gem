@@ -53,10 +53,10 @@ def _fit_cols(args):
 
 
 class Spectrum():
-    def __init__(self,filename,remove_cosmics=True,remove_sky=True,remove_avoidance=True,bootstrap=False,metadata_file='/home/mondrik/Gemini/metadata.txt'):
+    def __init__(self,filename,remove_cosmics=True,remove_sky=True,remove_avoidance=True,bootstrap=False,verbose=True):
         #get bias-subtracted and mosaiced image:
         self.filename = filename
-        self.fits_file,self.data = pi.proc_gmoss_image(self.filename,verbose=True)
+        self.fits_file,self.data = pi.proc_gmoss_image(self.filename,verbose=verbose)
         basename = os.path.split(self.filename)
         if bootstrap:
             #bootstrapped image is poission resampling of the gain-corrected, bias-removed image
@@ -87,7 +87,7 @@ class Spectrum():
         return None
 
     def generate_uncert_array(self):
-        self.uncert_array = np.sqrt(np.abs(self.working_img)) + 10
+        self.uncert_array = np.sqrt(np.abs(self.working_img)) + 2. #used to be 10.
 
 
     def estimate_sky(self,sky_start=40,region_size=30):

@@ -3,14 +3,17 @@ import astropy.io.fits as pft
 import os
 
 def proc_gmoss_image(filename,verbose=False,apply_master_bias=True,master_bias_path='/home/mondrik/Gemini/analysis/biases/',apply_gain_correction=True):
+    #assebles a GMOS-S fits file into a science array by subtracting overscan and possibly a master bias, applying gain, and aranging amplifiers (w/ chip gaps) into an array).
+    #also returns an estimate of the bias standard deviation as estimated from the overscan region
     gain_file = np.loadtxt('/home/mondrik/Gemini/analysis/gmosamps_gains.txt')
     N_amps = 12
 
     fits_file = pft.open(filename)
-    science_array = np.empty((512,0))
-    gain_array = np.empty((512,0))
-    #chip gaps are 62 pixels (unbinned in x dir)
-    chip_gap = np.zeros((512,61),dtype=np.float)
+    n_rows = fits_file[1].data.shape[0]
+    science_array = np.empty((n_rows,0))
+    gain_array = np.empty((n_rows,0))
+    #chip gaps are 61 pixels (unbinned in x dir)
+    chip_gap = np.zeros((n_rows,61),dtype=np.float)
 
     for i in range(N_amps):
         bias_sec = fits_file[i+1].header['BIASSEC']
@@ -44,7 +47,7 @@ def proc_gmoss_image(filename,verbose=False,apply_master_bias=True,master_bias_p
             gain_array = np.hstack((gain_array,chip_gap))
 
         if verbose:
-            print('AMPLIFIER {amp:d} BIAS: {bias:7.1f} BIAS_RMS: {biasrms:5.2f}'.format(amp=i,bias=np.median(bias_vec),biasrms=np.std(bias_vec)))
+            print('AMPLIFIER {amp:d} BIAS: {bias:7.1f} BIAS_STD: {biasstd:5.2f}'.format(amp=i,bias=np.median(bias_vec),biasstd=np.std(bias_vec)))
 
     if apply_master_bias:
         img_name = os.path.split(filename)[-1]
